@@ -1,0 +1,232 @@
+# -*- coding: utf-8 -*-
+import wave
+from time import sleep
+from winsound import Beep
+import serial
+import threading
+from threading import Timer
+from time import time
+import struct
+import pygame.midi
+import pygame
+import pyaudio
+import win32gui
+
+#---settings---
+#window size
+SCREEN_SIZE_x = 1200
+SCREEN_SIZE_y = 800
+
+#x_tick = [range(0, SCREEN_SIZE_x, ((SCREEN_SIZE_x - 100)/100))] #叩打表示のx軸刻み幅（3個分表示を仮定）
+
+RECORD_SECONDS = 10 #rec time[sec]
+bpm = 120 #beat per minute
+beeptime = 100 #click time[msec]
+
+beep_type = [1100, 700]
+beep_type_num = 0
+
+bpm_time = 1000.0/(bpm / 60.0) #time/1cl-ick[msec]
+minus_beeptime = (bpm_time - beeptime)/1000.0 #wait time between clicks[sec]
+
+filename_head = "../../data/preexperiment/20170802_missed_check/"
+file_num = "1"
+
+MIDI_OUTPUT_FILENAME = filename_head + "midi/midi_file" + str(file_num) + ".txt" #midi file name
+MYO_OUTPUT_FILENAME1 = filename_head + "myo/myo_file" + str(file_num) + "-1.txt" #myo file name
+MYO_OUTPUT_FILENAME2 = filename_head + "myo/myo_file" + str(file_num) + "-2.txt" #myo file name
+
+Myo_Frames1 = [] #Myoelectronical signal colums
+Myo_Frames2 = [] #Myoelectronical signal colums
+
+#myoelectronical(arduino) setup
+ser1 = serial.Serial("COM3",57600) #デバイス名とボーレート（arduino側も同じ数値に要設定）
+#ser2 = serial.Serial("COM4",57600) #デバイス名とボーレート（arduino側も同じ数値に要設定）
+record_flag = 0
+th_start_time = 0.0 #thread start time
+th_end_time = 0.0 #thread end time
+
+#screen update
+def screen_update(screen, values_list): #values_list = [[time, val],[time, val],...,[time, val]]
+    list_size = len(values_list)
+    if list_size > 100:
+        list_size = 100
+
+    #画面クリア
+    screen.fill((255, 255, 255)) #必要なところだけ白に戻した方が軽い説もあるので後で試す
+    tick_x = int(SCREEN_SIZE_x/1000) #横軸刻み幅計算
+    tick_y = int(SCREEN_SIZE_y/1000) #縦軸刻み幅計算
+
+    #描画
+    for i, row in enumerate(values_list[-(list_size):-1]):
+        pygame.draw.line(screen, (0, 0, 0), (0,0), (600,600))
+        #pygame.draw.line(screen, (0, 0, 0), (tick_x * i, tick_y * row[1]), (tick_x * (i+1), tick_y * values_list[len(values_list) - list_size + i][1]))
+
+    pygame.display.update()
+
+#define thread class
+class control_th():
+
+    def __init__(self):
+        self.stop_event = threading.Event() #停止させるかのフラグ
+
+        #スレッドの作成と開始
+        self.thread_click = threading.Thread(target = self.click_get)
+        self.thread_Myo = threading.Thread(target = self.Myo_get)
+        self.thread_Midi = threading.Thread(target = self.Midi_get)
+
+        self.thread_click.start()
+        self.thread_Myo.start()
+        self.thread_Midi.start()
+
+    def Myo_get(self):
+        size_count = 0
+
+        while not self.stop_event.is_set():
+            indent = ord(ser1.read())
+            data1_1 = ord(ser1.read())
+            data1_2 = ord(ser1.read())
+            data2_1 = ord(ser1.read())
+            data2_2 = ord(ser1.read())
+
+            t_data1 = ord(ser1.read())
+            t_data2 = ord(ser1.read())
+
+            data1_3 = (data1_1 << 8) + data1_2
+            data2_3 = (data2_1 << 8) + data2_2
+
+            t_data3 = (t_data1 << 8) + t_data2
+
+            if record_flag == 2:
+                Myo_Frames1.append([indent, t_data3, data1_3])
+                Myo_Frames2.append([indent, t_data3, data2_3])
+
+            wait_size = ser1.in_waiting
+
+            if size_count % 1000 == 0:
+                print "data1 = ", data1_3, " data2 = ", data2_3, " time_duration = ", t_data3, " waiting_bytes = ", wait_size
+                #print "indent1", indent1, "1. data = ", data1_3, "2. data = ", data2_3,  "time_duration = ", t_data, " waiting_bytes = ", ser1.in_waiting
+                size_count = 0
+            size_count += 1
+
+            #th_time += t_data3 / 1000000
+
+        #Myo_Frames1.insert(0, str(th_time))
+        #Myo_Frames2.insert(0, str(th_time))
+        Beep(1100, 1000)
+
+    #use if you need velocity and tap intervals from midi command by pygame
+    def Midi_get(self):
+        Muscle_frames = [] #Myo time & mean velocity colums
+
+        while record_flag == 0:
+            pass
+        pygame.init()
+        pygame.midi.init()
+        input_id = pygame.midi.get_default_input_id()
+        wm_info = pygame.display.get_wm_info()
+        handle = wm_info["window"]
+
+        win32gui.MoveWindow(handle,200,-1000,SCREEN_SIZE_x,SCREEN_SIZE_y,1) #window表示位置指定
+
+        screen = pygame.display.set_mode([SCREEN_SIZE_x, SCREEN_SIZE_y])
+
+        pygame.display.set_caption("test")
+
+        base_vel = 0 #basemyo velocity
+
+        index = 0
+        while not self.stop_event.is_set():
+            sleep(1)
+
+            if len(Myo_Frames1) >= 10:
+                time_sum = 0
+                myo_sum = 0
+                for row in Myo_Frames1[index:len(Myo_Frames1)-1]:
+                    time_sum += row[1]
+                    myo_sum += row[2]
+                Muscle_frames.append([time_sum / 1000.0, myo_sum/((len(Myo_Frames1) - 1) - index)]) #[ms, mean amplitude]
+
+                screen_update(screen, Muscle_frames)
+
+                index = len(Myo_Frames1)
+
+        pygame.quit()
+
+    def click_get(self):
+        while record_flag == 0:
+            pass
+        click_count = 0
+        while not self.stop_event.is_set():
+            Beep(beep_type[beep_type_num], beeptime/2)
+            sleep(minus_beeptime/2)
+            if record_flag == 1:
+                click_count += 1
+
+    def stop(self):
+        #スレッドを停止させる
+        self.stop_event.set()
+        self.thread_Myo.join() #スレッドが停止するのを待つ
+        self.thread_Midi.join() #スレッドが停止するのを待つ
+
+def Myo_write(MYO_OUTPUT_FILENAME, Myo_Frames):
+    f = open(MYO_OUTPUT_FILENAME, "w")
+
+    #outliers = "鈎b魔ﾁiｊｂﾊﾙ" #外れ値群　""の中にどんどん追加していく書式
+    f.write(str(Myo_Frames[0])) #write time while Myo get
+    f.write("\n")
+    for row in Myo_Frames[1:]:
+        f.write(str(row[0]))
+        f.write("\t")
+        f.write(str(row[1]))
+        f.write("\t")
+        f.write(str(row[2]))
+        f.write("\n")
+
+    f.close()
+
+#---main program---
+if __name__ == "__main__":
+    beep_type_num = 0
+    record_flag = 0
+
+    #thread start
+    thread_do = control_th()
+    #print "0 = exit, others = continue"
+    print "please input any key for continue"
+
+    raw_input()
+    record_flag = 1
+
+    #wait time for stabilization
+    for count in [5, 4, 3, 2, 1]:
+        print str(count) + " seconds before play start"
+        #Beep(700,beeptime)
+        sleep(1)
+    beep_type_num = 1
+
+    #---rec part---
+    #raw_input("press Enter key for rec start")
+    print "play start"
+    #sleep(5)
+
+    record_flag = 2
+
+    sleep(RECORD_SECONDS)
+
+    record_flag = 1
+    #raw_input() #rec end by press enter
+    print ("finished recording")
+    print ("wait...")
+
+    #thread end
+    thread_do.stop()
+    ser1.close() #シリアルポートのクローズ
+
+    #---output part---
+
+    #Myoelectronical output
+    Myo_write(MYO_OUTPUT_FILENAME1, Myo_Frames1)
+    Myo_write(MYO_OUTPUT_FILENAME2, Myo_Frames2)
+
+    print "finished"

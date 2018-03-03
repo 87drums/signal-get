@@ -1,0 +1,38 @@
+void setup() {
+  Serial.begin(57600);//レート選択 115200 57600 38400
+}
+
+int a0;
+int out0,out1;
+
+void loop() {
+  a0 = analogRead(0); //analog0から読み込み
+
+  a0 = a0 - 430; //Vin(4.3V)-grand(0V)
+
+//2byte(2回の通信)で数値の送信
+//1回目はmsbが1，2bit目が正負(10)，3bit目以降は127以上の値格納
+//2回目はmsbが0，2bit目以降は127以下の値格納
+  //正の値 次ビットが1
+  if(a0 >= 0){
+    if(a0 >= 127){
+      out0 = 128 + 64 + (a0 - 127);
+      out1 = 127;
+    }else{
+      out0 = 128 + 64;
+      out1 = a0;
+    }
+  //負の値 次ビットが0
+  }else{
+    if(a0 <= -127){
+      out0 = 128 - (a0 + 127);
+      out1 = 127;
+    }else{
+      out0 = 128;
+      out1 = 0 - a0;
+    }
+  }
+
+  Serial.write(out0); //シリアル通信でPCへデータ送信 1byte目
+  Serial.write(out1); //シリアル通信でPCへデータ送信 2byte目
+}
